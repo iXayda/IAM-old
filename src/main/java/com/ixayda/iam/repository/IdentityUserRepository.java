@@ -51,6 +51,22 @@ public class IdentityUserRepository {
 				.param("id", id).param("hash", hash).update();
 	}
 
+	public boolean hasPassword(UUID id) {
+		return this.jdbc.sql("SELECT EXISTS (SELECT 1 FROM iam_password WHERE user_id = :id)")
+				.param("id", id).query(Boolean.class).single();
+	}
+
+	public void activateAfterSetup(UUID id) {
+		int updated = this.jdbc.sql("""
+				UPDATE iam_user SET status = 'active' WHERE id = :id AND status = 'pending'
+				    AND EXISTS (SELECT 1 FROM iam_password WHERE user_id = :id)
+				    AND EXISTS (SELECT 1 FROM iam_user_setup WHERE user_id = :id AND status = 'consumed')
+				""").param("id", id).update();
+		if (updated != 1) {
+			throw new IllegalStateException("Account setup did not activate the user");
+		}
+	}
+
 	private static IdentityUser mapUser(ResultSet result, int row) throws SQLException {
 		return new IdentityUser(result.getObject("id", UUID.class), result.getString("username"),
 				result.getString("display_name"), IdentityUser.Status.valueOf(result.getString("status").toUpperCase(Locale.ROOT)),
