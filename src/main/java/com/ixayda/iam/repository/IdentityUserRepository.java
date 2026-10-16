@@ -46,6 +46,17 @@ public class IdentityUserRepository {
 				""").param("id", id).query(IdentityUserRepository::mapUser).optional();
 	}
 
+	public Optional<IdentityUser> lockByUsername(String username) {
+		return this.jdbc.sql("""
+				SELECT id, username, display_name, status, created_at FROM iam_user WHERE username = :username FOR UPDATE
+				""").param("username", username).query(IdentityUserRepository::mapUser).optional();
+	}
+
+	public Optional<String> findPasswordHash(UUID id) {
+		return this.jdbc.sql("SELECT password_hash FROM iam_password WHERE user_id = :id")
+				.param("id", id).query(String.class).optional();
+	}
+
 	public void insertPassword(UUID id, String hash) {
 		this.jdbc.sql("INSERT INTO iam_password (user_id, password_hash) VALUES (:id, :hash)")
 				.param("id", id).param("hash", hash).update();
