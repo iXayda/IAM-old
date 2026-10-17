@@ -50,6 +50,18 @@ public class PasswordAuthenticationLimitRepository {
 		requireOne(changed);
 	}
 
+	public void cleanUpExpired() {
+		this.jdbc.sql("""
+				WITH expired AS (
+				    SELECT dimension, subject_key FROM iam_password_authentication_limit
+				    WHERE window_started_at < clock_timestamp() - INTERVAL '1 day'
+				    ORDER BY window_started_at LIMIT 1000 FOR UPDATE SKIP LOCKED
+				)
+				DELETE FROM iam_password_authentication_limit current USING expired
+				WHERE current.dimension = expired.dimension AND current.subject_key = expired.subject_key
+				""").update();
+	}
+
 	private static void requireOne(int changed) {
 		if (changed != 1) {
 			throw new IllegalStateException("Authentication limit was not stored");
