@@ -35,11 +35,13 @@ public class PasswordAuthenticationLimitRepository {
 	}
 
 	public void recordFailure(String dimension, String key) {
+		int expected = failures(dimension, key) + 1;
 		int changed = this.jdbc.sql("""
 				UPDATE iam_password_authentication_limit SET failures = failures + 1
 				WHERE dimension = :dimension AND subject_key = :key
 				""").param("dimension", dimension).param("key", key).update();
 		requireOne(changed);
+		if (failures(dimension, key) != expected) { throw new IllegalStateException("Password failure budget was not stored"); }
 	}
 
 	public void clearAccount(String key) {
@@ -48,6 +50,12 @@ public class PasswordAuthenticationLimitRepository {
 				WHERE dimension = 'account' AND subject_key = :key
 				""").param("key", key).update();
 		requireOne(changed);
+		if (failures("account", key) != 0) { throw new IllegalStateException("Password failure budget was not cleared"); }
+	}
+
+	private int failures(String dimension, String key) {
+		return this.jdbc.sql("SELECT failures FROM iam_password_authentication_limit WHERE dimension = :dimension AND subject_key = :key")
+				.param("dimension", dimension).param("key", key).query(Integer.class).single();
 	}
 
 	public void cleanUpExpired() {
