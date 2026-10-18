@@ -34,6 +34,8 @@ import com.ixayda.iam.service.IdentityUsers;
 
 import com.jayway.jsonpath.JsonPath;
 
+import tools.jackson.databind.json.JsonMapper;
+
 import org.bouncycastle.crypto.digests.SHA1Digest;
 import org.bouncycastle.crypto.macs.HMac;
 import org.bouncycastle.crypto.params.KeyParameter;
@@ -333,7 +335,9 @@ class IdentityUserCreationIntegrationTests extends BrowserHttpTestSupport {
 				else { this.jdbc.sql("DELETE FROM iam_browser_session").update(); }
 			}
 			finally { this.pause.release.countDown(); }
-			assertThat(waiting.get(15, TimeUnit.SECONDS).statusCode()).isEqualTo(expected);
+			var response = waiting.get(15, TimeUnit.SECONDS);
+			assertThat(response.statusCode()).isEqualTo(expected);
+			assertErrorResponse(response, expected == 401 ? "UNAUTHENTICATED" : "FORBIDDEN");
 			assertThat(creationEvents()).isZero();
 		}
 	}
@@ -626,6 +630,15 @@ class IdentityUserCreationIntegrationTests extends BrowserHttpTestSupport {
 			}
 			return true;
 		}
+	}
+
+	private static void assertErrorResponse(HttpResponse<String> response, String code) {
+		assertSecurityHeaders(response);
+		assertThat(response.headers().firstValue("Content-Type").orElseThrow()).startsWith("application/json");
+		var error = new JsonMapper().readTree(response.body());
+		assertThat(error.propertyNames()).containsExactlyInAnyOrder("code", "message");
+		assertThat(error.path("code").asText()).isEqualTo(code);
+		assertThat(error.path("message").asText()).isNotBlank();
 	}
 
 	private String base() { return "https://localhost:" + this.port + "/api/admin/users"; }
