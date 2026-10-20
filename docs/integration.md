@@ -90,6 +90,8 @@ Cookie `__Host-IAMSESSION` 使用 Secure、HttpOnly、Path=/ 和 SameSite=Lax。
 
 ## 保密 Web/BFF
 
+从固定 issuer 的 Discovery 获取协议元数据，限制为预期 issuer、RS256 和可信 JWKS。Token 内携带的取钥地址不能改变信任来源；客户端只使用元数据实际声明的端点。
+
 BFF 保存客户端秘密，使用 `client_secret_basic`、授权码和 S256 PKCE，并将 state、nonce 及 verifier 绑定到单次登录交易：
 
 1. BFF 发起授权请求，IAM 导航到已配置的独立身份前端。
