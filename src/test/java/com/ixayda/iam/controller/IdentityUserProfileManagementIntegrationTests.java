@@ -19,6 +19,7 @@ import java.util.concurrent.TimeUnit;
 import com.ixayda.iam.PostgreSqlTestConfiguration;
 import com.ixayda.iam.dto.IdentityUserProfileUpdateRequest;
 import com.ixayda.iam.model.IdentityAdministratorAuthentication;
+import com.ixayda.iam.model.IdentityAdministratorContext;
 import com.ixayda.iam.model.IdentityTotpEnrollment;
 import com.ixayda.iam.model.IdentityUser;
 import com.ixayda.iam.model.SecurityAuditContext;
@@ -188,9 +189,9 @@ class IdentityUserProfileManagementIntegrationTests extends BrowserHttpTestSuppo
 				case "version" -> this.jdbc.sql("UPDATE iam_password SET credential_version=credential_version+1 WHERE user_id=:id").param("id", factor.userId()).update();
 				case "factor" -> this.jdbc.sql("DELETE FROM iam_user_totp").update();
 				case "session" -> this.jdbc.sql("DELETE FROM iam_browser_session").update();
-				case "expired" -> evidence = new AdministratorEvidence(evidence.actorId(), evidence.sessionId(), evidence.credentialVersion(), 1, evidence.management(), evidence.authentication());
+				case "expired" -> evidence = new IdentityAdministratorContext(evidence.actorId(), evidence.sessionId(), evidence.credentialVersion(), 1, evidence.management(), evidence.authentication());
 			}
-			var result = this.profiles.updateDisplayName(evidence.actorId(), evidence.sessionId(), evidence.credentialVersion(), evidence.authenticatedAt(), evidence.management(), target.id(), "Changed", freshCode(factor), evidence.authentication(), () -> {});
+			var result = this.profiles.updateDisplayName(evidence, target.id(), "Changed", freshCode(factor), () -> {});
 			assertThat(result).isIn(IdentityUserProfileManagement.Status.INVALID_SESSION, IdentityUserProfileManagement.Status.FORBIDDEN);
 			assertThat(this.users.findById(target.id())).contains(target); assertThat(events()).isZero();
 		}
@@ -205,7 +206,7 @@ class IdentityUserProfileManagementIntegrationTests extends BrowserHttpTestSuppo
 			long before = step(factor);
 			if (fault.equals("audit")) { this.jdbc.sql("ALTER TABLE iam_security_audit ADD CONSTRAINT profile_audit_fault CHECK (action<>'user_profile_updated')").update(); }
 			try {
-				assertThatThrownBy(() -> this.profiles.updateDisplayName(evidence.actorId(), evidence.sessionId(), evidence.credentialVersion(), evidence.authenticatedAt(), evidence.management(), target.id(), "Changed", freshCode(factor), evidence.authentication(), () -> {
+				assertThatThrownBy(() -> this.profiles.updateDisplayName(evidence, target.id(), "Changed", freshCode(factor), () -> {
 					if (fault.equals("persistence")) { throw new IllegalStateException("Save failed"); }
 					if (fault.equals("late-authority")) { this.jdbc.sql("DELETE FROM iam_administrator").update(); }
 				})).isInstanceOf(RuntimeException.class);
@@ -227,9 +228,8 @@ class IdentityUserProfileManagementIntegrationTests extends BrowserHttpTestSuppo
 			long deadline = System.currentTimeMillis() + 1500;
 			this.jdbc.sql("UPDATE iam_browser_session SET expiry_time = :expiry, last_access_time = :expiry - max_inactive_interval * 1000 WHERE session_id = :id")
 					.param("expiry", deadline).param("id", evidence.sessionId()).update();
-			assertThatIllegalStateException().isThrownBy(() -> this.profiles.updateDisplayName(evidence.actorId(), evidence.sessionId(), evidence.credentialVersion(),
-					evidence.authenticatedAt(), evidence.management(), target.id(), "Changed",
-					freshCode(factor), evidence.authentication(), () -> {
+			assertThatIllegalStateException().isThrownBy(() -> this.profiles.updateDisplayName(evidence, target.id(), "Changed",
+					freshCode(factor), () -> {
 						await().atMost(Duration.ofSeconds(5)).until(() -> System.currentTimeMillis() > deadline);
 						this.jdbc.sql("UPDATE iam_browser_session SET expiry_time = :expiry, last_access_time = :expiry - max_inactive_interval * 1000 WHERE session_id = :id")
 								.param("expiry", deadline + 60_000).param("id", evidence.sessionId()).update();
@@ -248,18 +248,18 @@ class IdentityUserProfileManagementIntegrationTests extends BrowserHttpTestSuppo
 		try (var client = client(); var executor = Executors.newFixedThreadPool(2)) {
 			String session = elevate(client, login(client, "alice"), factor); var context = evidence(factor, session); String code = freshCode(factor);
 			var start = new CountDownLatch(1);
-			var one = executor.submit(() -> { start.await(); return this.profiles.updateDisplayName(context.actorId(), context.sessionId(), context.credentialVersion(), context.authenticatedAt(), context.management(), target.id(), "One", code, context.authentication(), () -> {}); });
-			var two = executor.submit(() -> { start.await(); return this.profiles.updateDisplayName(context.actorId(), context.sessionId(), context.credentialVersion(), context.authenticatedAt(), context.management(), target.id(), "Two", code, context.authentication(), () -> {}); });
+			var one = executor.submit(() -> { start.await(); return this.profiles.updateDisplayName(context, target.id(), "One", code, () -> {}); });
+			var two = executor.submit(() -> { start.await(); return this.profiles.updateDisplayName(context, target.id(), "Two", code, () -> {}); });
 			start.countDown();
 			assertThat(List.of(one.get(20, TimeUnit.SECONDS), two.get(20, TimeUnit.SECONDS))).containsExactlyInAnyOrder(IdentityUserProfileManagement.Status.UPDATED, IdentityUserProfileManagement.Status.REJECTED);
 			assertThat(events()).isEqualTo(1);
-			assertThatThrownBy(() -> new TransactionTemplate(this.transactions).executeWithoutResult(tx -> this.profiles.updateDisplayName(context.actorId(), context.sessionId(), context.credentialVersion(), context.authenticatedAt(), context.management(), target.id(), "Other", code, context.authentication(), () -> {}))).isInstanceOf(IllegalStateException.class);
+			assertThatThrownBy(() -> new TransactionTemplate(this.transactions).executeWithoutResult(tx -> this.profiles.updateDisplayName(context, target.id(), "Other", code, () -> {}))).isInstanceOf(IllegalStateException.class);
 			assertThat(new IdentityUserProfileUpdateRequest("Private", "123456").toString()).doesNotContain("Private", "123456");
 		}
 	}
 
-	private AdministratorEvidence evidence(IdentityTotpEnrollment factor, String cookie) {
-		return new AdministratorEvidence(factor.userId(), cookie.substring(cookie.indexOf('=') + 1), (Long) attribute(cookie, IdentityBrowserSessions.CREDENTIAL_VERSION),
+	private IdentityAdministratorContext evidence(IdentityTotpEnrollment factor, String cookie) {
+		return new IdentityAdministratorContext(factor.userId(), cookie.substring(cookie.indexOf('=') + 1), (Long) attribute(cookie, IdentityBrowserSessions.CREDENTIAL_VERSION),
 				(Long) attribute(cookie, IdentityBrowserSessions.AUTHENTICATED_AT), (IdentityAdministratorAuthentication) attribute(cookie, IdentityAdministratorSessions.AUTHENTICATION), context());
 	}
 	private Object attribute(String cookie, String name) {
@@ -302,7 +302,4 @@ class IdentityUserProfileManagementIntegrationTests extends BrowserHttpTestSuppo
 		int number = ((hash[offset] & 127) << 24) | ((hash[offset + 1] & 255) << 16) | ((hash[offset + 2] & 255) << 8) | (hash[offset + 3] & 255);
 		return String.format(java.util.Locale.ROOT, "%06d", number % 1_000_000);
 	}
-
-	private record AdministratorEvidence(UUID actorId, String sessionId, long credentialVersion, long authenticatedAt,
-			IdentityAdministratorAuthentication management, TotpAuthenticationContext authentication) { }
 }
